@@ -1,0 +1,790 @@
+---
+title: "Análisis espacio-temporal de Datos de Krill 1980 - 2019 en el Bloque 48"
+subtitle: ""
+author: "Mauricio Mardones I"
+date: "`r format(Sys.time(), '%d %b %Y')`"
+output: pdf_document
+---
+
+\pagebreak
+
+# Objetivo del documento
+
+Este documento contiene análisis exploratorios de diversas bases de datos dde Krill para ver series de tiempo identificando patrones espaciales y temporales de distintos indicadores , ya sea de la dinamica de la poblaciòn y su estructura, asi como también de la pesquería asociada.
+
+Para el análisis, debemos tener los siguientes archivos de trabajo;
+
+1.  Archivo denominado *"catk"*, que se refiere a data de la pesquería de krill entre los años 1980 y 2019 de las áreas 48.1 y 48.2.
+
+
+2.  Archivo denominado *"krillbase"*, que es una base de datos publica de surveys y estimaciones de densidades medias de krill georeferenciadas. (www.krillbase.com)
+
+
+3.  Archivo denominado *"mdat"*, que es una base de datos publica de densidades y calculos de biomasas de los ultimos surveys realizados por distintas naciones en el blowque 48. Se utiliza parte del codigo porvisto por Tracey Dornan
+
+
+En este primer paso falta analizar los datos biológicos, como tallas y pesos.
+
+\pagebreak
+
+
+```{r setup}
+# Primero limpio y seteo mi directorio de trabajo 
+setwd("~/DOCAS/Data")
+getwd()
+```
+
+Cargo librerías necesarias para el análisis exploratorio de los datos de las distintas bases
+
+```{r lib, warning=F, message=F, error=F}
+library(GGally)
+library(tidyverse, quietly = TRUE)
+library(patchwork)
+library(marmap)
+library(ggplot2)
+library(mapproj)
+library(maps)
+library(raster)
+library(dbplyr)
+library(knitr)
+library(data.table)
+library(knitr, quietly = TRUE)
+library(ggplot2, quietly = TRUE)
+library(kableExtra)
+library(ggsignif)
+library(ggrepel)
+library(CCAMLRGIS)
+library(sf)
+```
+
+
+Leo las tres bases de datos que contiene el archivo
+
+```{r data, message=FALSE, warning=FALSE}
+catk <- read_csv("Catch_Effort_1980_2019_withD1MPA_Zones.csv") # Archivo con datos de bitacora pesquera entregado por Lukas Kruguer INACH
+kb <- read_csv("krillbase_data.csv") # Base completa del KRILLBASE. TOdas las Areas
+mdat <- read.csv("ASAM_metadata_2021_v2_tidy_0.csv") # ASAM Metadata 2021 Krill Biomass Estimate. by Tracey Dornan
+```
+
+
+```{r data2}
+# Genero una carpeta en donde alojar figuras
+dir.Fig        <-"Figuras/"
+fig            <-c("pdf","bmp")
+```
+
+\pagebreak
+
+# Base de datos de la pesquería 1980-2019 
+
+Luego visualizamos la estructura y los nombres ded cada variable
+
+```{r str de los datos}
+glimpse(catk) #un vistazo de los datos
+names(catk) # nombres de las variables
+dim(catk) #dimensiones de la base
+```
+
+A su vez identifico los set de datos
+
+```{r}
+sort(unique(catk$Year)) #años disiponibles
+unique(catk$Ship_name) # naves que realizar la evaluación
+unique(catk$SSMU) # datos en las SSMU
+```
+
+Ahora un rápido chequeo del comportamiento de capturas y rendimientos
+
+### CAPTURAS
+
+```{r catch1, warning=F, include=T, message=F, echo=FALSE,fig.height=3,fig.width=6,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Catch Mean by Subarea"}
+c <-ggplot(data=catk, aes(x=Year, y=Caught_ton, group=Year)) +
+    geom_boxplot(show.legend = FALSE, fill=2, coef=6) +
+   #scale_fill_viridis_c(alpha=0.6) +
+    #geom_jitter(size=0.4, alpha=0.2) +
+    facet_wrap(.~SubArea , ncol=4)+
+    #theme_ipsum() +
+    scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 2))+
+    theme_bw()+
+    theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+    ylim(0,80)+
+    ggtitle('')+
+    xlab('Años')+
+    ylab('Mean Catch per Haul')
+c
+```
+Capturas por SSMU
+
+```{r catch2, warning=F, include=T, message=F, echo=FALSE,fig.height=9,fig.width=7,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Catch Mean by SSMU"}
+c <-ggplot(data=catk, aes(x=Year, y=Caught_ton, group=Year)) +
+    geom_boxplot(show.legend = FALSE, fill=7, coef=6,outlier.shape = NA) +
+    #scale_fill_viridis_c(alpha=0.6) +
+    #geom_jitter(size=0.4, alpha=0.1) +
+    facet_wrap(.~SSMU , ncol=3)+
+    #theme_ipsum() +
+    scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 4))+
+    theme_bw()+
+    theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+    ylim(0,100)+
+    ggtitle('')+
+    xlab('Años')+
+    ylab('Mean Catch by haul (t.)')
+c
+```
+
+ahora visualizo el comportamiento de la variable de captura por lance
+
+```{r histc, warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=7,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Hist Catch "}
+
+hs <- ggplot(catk, aes(x=Caught_ton))+
+  geom_histogram(binwidth=2, show.legend = FALSE, fill="#41ae76")+
+  facet_wrap(~SubArea)+
+  xlim(0,100)+
+  theme_bw()
+hs
+```
+
+Ahora estimo capturas totales y su comportamiento  en el tiempo y locación.
+
+```{r Catchto, warning=F, include=T, message=F, echo=FALSE,fig.height=4,fig.width=8,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Catch total by SubArea 1"}
+# genero la suma por año y por zona
+catch <- aggregate(Caught_ton~ Year+SubArea+SSMU, data = catk, FUN = sum)
+
+
+sc <- ggplot(catch, aes(x=Year, y=Caught_ton/1000)) + 
+        geom_point(aes(colour=SSMU, size=Caught_ton/1000)) +
+        geom_smooth(method = "loess", colour='#fc4e2a', fill='#fc4e2a', alpha=.3)+
+        scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 2))+
+        #scale_color_viridis_d(option="D")+
+        scale_color_brewer(palette = "Paired")+
+        theme_bw()+
+        theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 2))+
+        facet_wrap(~SubArea, ncol =2)+
+        ylim(0,150)+
+        ylab("Catch (t.)")+
+        ggtitle('Sum Catch (t.)')
+sc
+```
+
+Miro las capturas totales observadas por SSMU y Subarea
+
+```{r Catchto3, warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=8,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Catch total by SubArea 3"}
+catch2 <- catk %>%
+  group_by(Year, SubArea) %>% 
+  summarise(sumcatch=sum(Caught_ton))
+              
+
+
+sc3 <- ggplot(catch2, aes(x=Year, y=sumcatch/1000)) + 
+        geom_point(aes(size=sumcatch)) +
+        geom_smooth(method = "loess", colour='#fc4e2a', fill='#fc4e2a', alpha=.3)+
+        scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 2))+
+        theme_bw()+
+        theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 2))+
+        facet_wrap(~SubArea, ncol =3)+
+        ylim(0,150)+
+        ylab("Catch (t.)")+
+        ggtitle('Sum Catch (t.)')
+sc3
+```
+
+Aqui es necesario identificar el por que aumentan las capturas. Existen mas estudios (surveys) o bien hay mas tecnificación de las artes de muestreo? Considerar esta alza dado que las capturas son indicadores de otros componentes no relacionados con la dinamica del recurso.
+
+```{r Catchtosu, warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=8,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Catch total by SSMU"}
+
+sc <- ggplot(catch, aes(x=Year, y=Caught_ton/1000)) + 
+        geom_point() +
+        geom_smooth(method = "loess", colour='blue', fill='blue', alpha=.3)+
+        scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 2))+
+        theme_bw()+
+        theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 2))+
+        facet_wrap(~SSMU, ncol =3)+
+        ggtitle('Sum Catch (t.) by SSMU')+
+        ylab("Capt Totales (t.)")+
+        ylim(0,100)
+sc
+```
+
+A pesar que la captura de la base no indica niveles poblacionales, podemos se puede identificar cuales son las ares SSMU principales de extracción que luego veremos en el mapa.
+
+Miro como se distribuyen los datos en la profundidad
+
+```{r hispro, , warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=7,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Hist by deep by SubA"}
+hp <- ggplot(catk, aes(x=Depth_m))+
+  geom_histogram(binwidth=7, show.legend = FALSE, fill=4)+
+  facet_wrap(~SubArea)+
+  xlim(0,500)+
+  theme_bw()
+hp
+```
+
+identifico como se mueve la profundidad de los lances a traves de los años por SSMU
+
+```{r deepSSMU , warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=7,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Deep by SSMU"}
+prt <-ggplot(data=catk, aes(x=Year, y=Depth_m, group=Year)) +
+    geom_boxplot(show.legend = FALSE, fill=7, outlier.shape = NA) +
+   #scale_fill_viridis_c(alpha=0.6) +
+    #geom_jitter(size=0.4, alpha=0.2) +
+    facet_wrap(.~SSMU , ncol=3)+
+    #theme_ipsum() +
+    scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 4))+
+    theme_bw()+
+    theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+    ggtitle('')+
+    xlab('Años')+
+    ylab('Deep by haul')+
+    scale_y_reverse(limits = c(400, 0))
+prt
+```
+
+Identifico ahora la profundidad por año y por SubArea
+
+```{r deepSuba , warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=8,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Deep by subarea"}
+prt <-ggplot(data=catk, aes(x=Year, y=Depth_m, group=Year)) +
+    geom_boxplot(show.legend = FALSE, fill=5, outlier.shape = NA) +
+   #scale_fill_viridis_c(alpha=0.6) +
+    #geom_jitter(size=0.4, alpha=0.2) +
+    facet_wrap(.~SubArea , ncol=2)+
+    #theme_ipsum() +
+    scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 4))+
+    theme_bw()+
+    theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+    ggtitle('')+
+    xlab('Años')+
+    ylab('Mean Catch per Haul')+
+    scale_y_reverse(limits = c(400, 0))
+prt
+```
+
+```{r deepyear , warning=F, include=T, message=F, echo=FALSE,fig.height=9,fig.width=6,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Deep by year 2"}
+depth <- aggregate(Caught_ton~ SSMU+Depth_m+Year, data = catk, FUN = sum)
+
+pr <-ggplot(data=depth, aes(x=SSMU, y=Depth_m, group=SSMU)) +
+    geom_boxplot(show.legend = FALSE, fill=4) +
+    #geom_jitter(size=1, alpha=0.2) +
+    theme_bw()+
+    theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+    facet_wrap(~Year)+
+    ggtitle('')+
+    xlab('SSMU')+
+    ylab('Mean depth (mt.) for haul x SSMU')+
+    scale_y_reverse(limits = c(400,0))
+pr
+```
+
+Quiero ver ahora los datos de las embarcaciones
+
+
+```{r CaptAnovessel, warning=F, include=T, message=F, fig.height=8,fig.width=5,fig.path=dir.Fig,dev=fig, fig.cap="Data by Vessel"}
+# Por vessel
+
+vess <- catk %>%
+  group_by(Year, Ship_name) %>% 
+  summarise(sumcatch=sum(Caught_ton/1000))
+              
+
+vs <- ggplot(vess, aes(x=Year, y=sumcatch)) + 
+  geom_col(stat = "identity" , colour="#02818a", fill="#02818a", alpha=.3) +
+  facet_wrap(.~Ship_name, ncol =  5)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size=9))+
+  scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 2))+
+  ylab("Captura (t.)")+
+  #geom_text(aes(label=CAPTURA_2), position=position_dodge(width=0.9), vjust=0)+
+  ggtitle("Captura por barco y año")
+vs
+```
+
+```{r CaptAnovessellevel, warning=F, include=T, message=F, fig.height=8,fig.width=4,fig.path=dir.Fig,dev=fig, fig.cap="Data by Vessel level"}
+
+llp <- ggplot(catk %>% 
+         mutate(name = fct_reorder(Ship_name, desc(Caught_ton))),  
+         aes(x=Ship_name, y=Caught_ton)) +
+    geom_bar(stat="identity", fill="#f68060", alpha=.6, width=.4) +
+    coord_flip() +
+    xlab("") +
+    theme_bw()
+llp
+```
+
+
+### CPUE
+
+Ahora explorar la CPUE por SSMU
+
+```{r CPUEs, warning=F, include=T, message=F, echo=FALSE,fig.height=15,fig.width=10,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="cpue by ssmu"}
+cpue <- aggregate(CPUE~ SSMU+SubArea+Year, data = catk, FUN = mean)
+
+
+
+p <- ggplot() +
+    geom_col(data=cpue %>% 
+              filter(Year>1990), aes(x=SSMU, y=CPUE, 
+                                     fill=CPUE))+
+    facet_wrap(~Year, ncol=5)+
+    #scale_fill_gradient(low='white', high='red')+
+    scale_fill_viridis_c(option = "A")+
+    theme_minimal()+
+    coord_polar(start = 0)
+p
+```
+
+```{r CPUE2, warning=F, include=T, message=F, echo=FALSE,fig.height=8,fig.width=8,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Cpue by SSMU"}
+
+scp <- ggplot(cpue, aes(x=Year, y=CPUE)) + 
+        geom_point() +
+        geom_smooth(method = "loess", colour='blue', fill='blue', alpha=.3)+
+        scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 4))+
+        theme_bw()+
+        theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 2))+
+        facet_wrap(~SSMU, ncol =3)+
+        ggtitle('CPUE (kg/haul) by SSMU')+
+        ylim(0,100)
+scp
+```
+
+```{r CPUE3, warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=9,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Cpue by SUBArea"}
+cpue <- aggregate(CPUE~ SSMU+SubArea+Year, data = catk, FUN = mean)
+
+
+scp <- ggplot(cpue, aes(x=Year, y=CPUE)) + 
+        geom_point(aes(colour=SSMU, size=CPUE)) +
+        geom_smooth(method = "loess", colour='blue', fill='blue', alpha=.3)+
+        scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 4))+
+        theme_bw()+
+        scale_color_brewer(palette = "Paired")+
+        theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 2))+
+        facet_wrap(~SubArea, ncol =2)+
+        ggtitle('CPUE (kg/haul) by SubArea')+
+        ylim(0,100)
+scp
+```
+
+
+```{r CPUE4, warning=F, include=T, message=F, echo=FALSE,fig.height=4,fig.width=6,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Cpue by SUBArea by SSMU"}
+
+cpue2 <- aggregate(CPUE~ SubArea+Year, data = catk, FUN = mean)
+
+scp1 <- ggplot(cpue2, aes(x=Year, y=CPUE)) + 
+        geom_point(aes(size=0.9, alpha=0.1)) +
+        geom_smooth(method = "loess", colour='blue', fill='blue', alpha=.3)+
+        scale_x_continuous(breaks = seq(from = 1980, to = 2019, by = 2))+
+        theme_bw()+
+        scale_color_brewer(palette = "Paired")+
+        scale_size(guide="none")+
+        scale_alpha(guide="none")+
+        theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 2))+
+        facet_wrap(~SubArea, ncol =2)+
+        ggtitle('CPUE (kg/haul) by SubArea')+
+        ylim(0,100)
+scp1
+
+```
+
+
+
+\pagebreak
+
+Ahora genero unos mapas simples para ver distribución de variables pesqueras
+
+```{r preparo raster de subareas}
+#mapzona2 <- readShapePoly('~/DOCAS/Mapas/asd-shapefile-WGS84/asd-shapefile-WGS84.shp')
+mapzona2 <- st_read('~/DOCAS/Data/shapes_areas_subareas.shp')
+
+# ahora eligo las subareas de interes
+mapzona2$Name
+# [1] "Subarea 88.3"     "Subarea 48.4"     "Subarea 88.2"     "Subarea 48.1"    
+#  [5] "Subarea 48.2"     "Subarea 48.3"     "Division 58.4.3a" "Division 58.4.3b"
+#  [9] "Division 58.5.2"  "Subarea 48.5"     "Subarea 48.6"     "Division 58.4.1" 
+# [13] "Division 58.4.2"  "Subarea 88.1"     "Division 58.4.4a" "Subarea 58.7"    
+# [17] "Subarea 58.6"     "Division 58.5.1"  "Division 58.4.4b"
+
+
+# extraigo las SA 48.1 y 48.2
+pm <- subset(mapzona2[c(4,5),])
+
+#ploteo solo la capa de bordes
+
+plot(st_geometry(pm))
+#transformo pra uso en ggplot. Hay otras formas con "sf". Pero he usado esta hace rato
+
+pm2 <- fortify(st_geometry(pm))
+```
+
+Ahora el Mapa de Capturas. Este mapa es total, por ende, debo resumir la variable por algun algoritmo algebraico.
+
+```{r Mapa Capt, warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=6,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Distribución Captura por año y subarea"}
+ggplot() +
+  geom_sf(data = pm2, aes(colour=Name),
+          colour="grey", fill='aliceblue') +
+  #borders(fill="black",colour="black")+
+  #geom_polygon(data = ASD_483, aes(x=long, y = lat, group=group), 
+  #             fill="grey", alpha=0.8) +
+  geom_point(data=catk %>% 
+               filter(Year==1980 | Year==2000| Year==2010| Year==2019), 
+             aes(x=Longitude, y=Latitude,
+                            colour=Caught_ton, alpha=0.05)) +
+  scale_color_viridis_c(option="C", name="Capturas (t.)", direction = -1)+
+  #scale_fill_gradient(low='white', high='red')+
+  # geom_text_repel(data=catk,aes(x=Longitude, y=Latitude, 
+  #                                  label=SubArea),
+  #                  min.segment.length = 0,
+  #                  box.padding = 0.9,
+  #                  max.overlaps = 100) +
+  facet_wrap(~Year, ncol = 2)+
+  scale_alpha(guide="none")+
+  theme_bw()+
+  # annotation_north_arrow(location="tr",
+  #                         height = unit(1.5, "cm"),
+  #                         width = unit(1.5, "cm"))+
+  # xlab(expression(paste(Longitude^o,~'O'))) +
+  ylab(expression(paste(Latitude^o,~'S')))+
+  theme(panel.background = element_rect(fill = 'white'))
+    
+```
+Ahora veo la CPUE
+
+
+```{r Mapa Cpue, warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=6,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Distribución Cpue por año y subarea"}
+ggplot() +
+  geom_sf(data = pm2, aes(colour=Name),
+          colour="grey", fill='aliceblue') +
+  #borders(fill="black",colour="black")+
+  #geom_polygon(data = ASD_483, aes(x=long, y = lat, group=group), 
+  #             fill="grey", alpha=0.8) +
+  geom_point(data=catk %>% 
+               filter(Year==1980 | Year==2000| Year==2010| Year==2019), 
+             aes(x=Longitude, y=Latitude,
+                            colour=CPUE, alpha=0.05)) +
+  scale_color_viridis_c(option="A", name="Capturas (t.)", direction = -1)+
+  #scale_fill_gradient(low='white', high='red')+
+  # geom_text_repel(data=catk,aes(x=Longitude, y=Latitude, 
+  #                                  label=SubArea),
+  #                  min.segment.length = 0,
+  #                  box.padding = 0.9,
+  #                  max.overlaps = 100) +
+  facet_wrap(~Year, ncol = 2)+
+  scale_alpha(guide="none")+
+  theme_bw()+
+  # annotation_north_arrow(location="tr",
+  #                         height = unit(1.5, "cm"),
+  #                         width = unit(1.5, "cm"))+
+  # xlab(expression(paste(Longitude^o,~'O'))) +
+  ylab(expression(paste(Latitude^o,~'S')))+
+  theme(panel.background = element_rect(fill = 'white'))
+    
+```
+
+# Base de de los survey
+
+Base de datos provista en WG-EMM-2021/05 Rev. . El codigo es un provisto por Tracey Dorna
+### Set up document, files and packages
+
+Packages used: 
+ 
+    Matt Dowle and Arun Srinivasan (2020). data.table: Extension of `data.frame`. R package version 1.13.4.
+    https://CRAN.R-project.org/package=data.table  
+   
+    Hadley Wickham (2016). ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York.  
+   
+    Yihui Xie (2020). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version 1.30.   
+
+   
+
+  
+
+### Read in data 
+
+````{r}
+mdat <- read.csv("ASAM_metadata_2021_v2_tidy_0.csv")
+```
+
+### Tidy and inspect file structure
+
+  1. Checking structure (most data is currently character type)
+  2. Renaming columns to be R friendly
+  3. Inspect individual column contents for unusual formats or notes prior to type conversion
+  
+
+### Names of Data:
+
+Set names to be more R Friendly 
+
+```{r data inspection, include=TRUE}
+#names(mdat)
+# print table of metadata column names and R coding names
+knitr::kable(as.data.frame(cbind(`Metadata Table Names`=names(mdat), 
+                    `R Names`=c("Year_yyyy",
+                      "Month_MON",
+                      "Vessel",
+                      "Contributor",
+                      "Subarea",
+                      "Survey_name",
+                      "Density_gm2",
+                      "CV_of_density_Perc",
+                      "CV_method",
+                      "Survey_area_km2",
+                      "Echosounder",
+                      "Freq_for_biomass_est_kHz",
+                      "Frequencies_avail",
+                      "TS_Id_Method",
+                      "dB_diff_window",
+                      "TS_model",
+                      "Depth_range_integrated_m",
+                      "Time_sampled",
+                      "Stratum_name",
+                      "Survey_design_description", 
+                      "Reference", 
+                      "Note", 
+                      "empty1", 
+                      "sourceexl",
+                      "Net", 
+                      "Towdesign", 
+                      "ASAM_NOTES"))))
+
+#rename columns to be code friendly
+setnames(mdat, names(mdat), c("Year_yyyy",
+                              "Month_MON",
+                              "Vessel",
+                              "Contributor",
+                              "Subarea",
+                              "Survey_name",
+                              "Density_gm2",
+                              "CV_of_density_Perc",
+                              "CV_method",
+                              "Survey_area_km2",
+                              "Echosounder",
+                              "Freq_for_biomass_est_kHz",
+                              "Frequencies_avail",
+                              "TS_Id_Method",
+                              "dB_diff_window",
+                              "TS_model",
+                              "Depth_range_integrated_m",
+                              "Time_sampled",
+                              "Stratum_name",
+                              "Survey_design_description", 
+                              "Reference", 
+                              "Note", 
+                              "empty1", 
+                              "sourceexl",
+                              "Net", 
+                              "Towdesign", 
+                              "ASAM_NOTES"))
+
+```
+
+### Years & Months available:
+
+```{r yrs, include=TRUE}
+sort(unique(mdat$Year_yyyy))
+
+unique(mdat$Month_MON) 
+
+```
+
+### Vessels and contributors
+
+```{r VnCs, include=TRUE}
+unique(mdat$Vessel)
+unique(mdat$Contributor)   
+```
+
+### Subarea codes
+ 
+Area "48" is the ccamlr 2000 survey
+```{r subareas, include=TRUE}                                
+unique(mdat$Subarea) # Area "48" is the ccamlr 2000 survey
+
+```
+
+### CV method
+
+
+```{r cvmeths, include=TRUE}
+unique(mdat$CV_method) 
+```
+  
+There is an unusual entry of CV method:
+
+  "Here, the CV were simply calculated as the S.E/Mean x 100% for each stratum or entire survey area"
+  
+A note has been added to the "Note" column indicating that "CV calculated as the S.E/Mean x 100% for each stratum or entire survey area"  
+
+
+ **Data where CV calculated as the S.E/Mean x 100% for each stratum or entire survey area**
+ 
+```{r cv 95 CIs, include=TRUE}
+# INSPECT and add to ASAM_NOTES column
+knitr::kable(mdat[mdat$CV_method=="Here, the CV were simply calculated as the S.E/Mean x 100% for each stratum or entire survey area", c(1:8, 10)])
+```
+
+### Echosounder used:
+
+```{r echos, include=TRUE}
+unique(mdat$Echosounder)
+
+```
+
+### Frequency used for biomass estimation, TS method and TS model
+
+```{r Freq TSs, include=TRUE}
+unique(mdat$Freq_for_biomass_est_kHz)
+unique(mdat$TS_Id_Method)
+unique(mdat$TS_model)
+
+```
+
+### Depth range integrated
+
+```{r dint, include=TRUE}
+unique(mdat$Depth_range_integrated_m)
+
+```
+
+### Time of samples
+
+```{r times, include=TRUE}
+unique(mdat$Time_sampled) # ? should we consolidate "daylight only" to be "day"
+
+```
+
+### Stratum names and codes
+
+To ease coding new strata codes were set up for Area 48.1 data under col 'strata'.  
+
+Strata that were assigned a code based on the area they matched best.  
+
+Surveys which overlapped multiple areas were assigned combined codes.
+
+```{r strata_filter, echo=TRUE}
+unique(mdat$Stratum_name)
+```
+
+### Survey design
+
+```{r survey desc, include=TRUE}
+
+unique(mdat$Survey_design_description)
+
+```
+
+### Notes/Comments
+
+```{r note, include=TRUE}
+unique(mdat$Note)
+unique(mdat$empty1)
+unique(mdat$ASAM_NOTES)
+
+#mdat[mdat$ASAM_NOTES=="", mdat$ASAM_NOTES=="NA"] # getting rid of empty ""
+
+```
+
+### Survey details
+
+Tow design. 
+Nets.
+Source exl. 
+
+```{r details, include=TRUE}
+
+unique(mdat$Towdesign)
+
+unique(mdat$Net)
+
+unique(mdat$sourceexl)
+```
+
+
+### Remove Duplicate and Bad data
+
+As analysis requires Density CV and Area for weighted density calculations:
+ 
+  1.	Remove rows which do not have complete records for ‘Density’ and/or ‘CV’ 
+  2.	Remove anything with a comment in the ‘ASAM_NOTES’ because this was either
+    a.	the same AMLR data but run with the Greene algorithm so DUPLICATED 
+    b.	incomplete/the area wasn’t covered properly so difficult to weight appropriately
+
+**Removed data is being saved in a table named remdat**
+
+```{r remove dup}
+
+# Retain a data.table with data removed
+#remdat <- mdat[is.na(mdat$ASAM_NOTES)]
+
+# Remove duplicated or other data with comments in ASAM_NOTES
+#mdat <- mdat[is.na(mdat$ASAM_NOTES)]
+
+```
+ 
+### Density 
+
+Miramos los datos de densidades
+
+
+```{r inspect dens, include=TRUE}
+unique(mdat$Density_gm2)
+```
+
+
+```{r hdba, warning=F, include=T, message=F, echo=FALSE,fig.height=7,fig.width=9,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Histo Dens by Area"}
+mdat$Density_gm2<- as.double(mdat$Density_gm2)
+h <- ggplot(mdat, aes(x=as.double(Density_gm2)))+
+  geom_histogram(binwidth=5, show.legend = FALSE, fill=2)+
+  facet_wrap(~Subarea, ncol =3)+
+  theme_bw()
+h
+```
+
+A plot with density in grs.
+
+
+```{r densidad by, warning=F, include=T, message=F, echo=FALSE,fig.height=6,fig.width=8,fig.align="center",fig.path=dir.Fig,dev=fig, fig.cap="Densidad by subArea"}
+sc <- ggplot(mdat, aes(x=Year_yyyy, y=as.double(mdat$Density_gm2))) + 
+        geom_point() +
+        geom_smooth(method = "loess", colour='blue', fill='blue', alpha=.3)+
+        scale_x_continuous(breaks = seq(from = 190, to = 2019, by = 4))+
+        theme_bw()+
+        theme(axis.text.x  = element_text(angle=90, vjust=0.5, size=9))+
+        theme(axis.text.x = element_text(angle = 90, hjust = 2))+
+        facet_wrap(~Subarea, ncol =3)+
+        ggtitle('Density Krill Survey (gr.)')+
+        ylim(0,400)+
+        xlim(1995,2020)
+sc
+
+```
+ 
+#### CV
+
+Some CV values are 95% CI range rather than actual CV.
+
+Remove from analysis data set (store in remdat).
+
+```{r inspect CV, include=TRUE}
+
+unique(mdat$CV_of_density_Perc)
+
+mdat$CV_of_density_Perc <- as.double(mdat$CV_of_density_Perc)
+hist(mdat$CV_of_density_Perc, breaks = 100)
+
+# 
+# knitr::kable(mdat[CV_of_density_Perc=="95%CI 0-6.42"|CV_of_density_Perc=="95%CI 0.21-11.29", 1:10])
+# 
+# # The above do not have CV values we can work with so removing them from analysis
+# remdat <- rbind(remdat,  mdat[CV_of_density_Perc %in% c("95%CI 0-6.42", "95%CI 0.21-11.29")])
+# mdat <- mdat[!CV_of_density_Perc %in% c("95%CI 0-6.42", "95%CI 0.21-11.29")]
+
+```
+
+Guardo imagen con reccursos usados
+
+```{r}
+save.image(file = "expl_dat_kr.RData")
+```
+
